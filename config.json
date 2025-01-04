@@ -1,0 +1,7 @@
+{
+    "block_size": 8,
+    "sync_marker": "10101010",
+    "embedding_strength": 3.0,
+    "redundancy": 4,
+    "rs_error_correction": 20
+}
