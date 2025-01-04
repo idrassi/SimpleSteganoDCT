@@ -260,11 +260,13 @@ The metrics are calculated and printed after embedding. They provide a quantitat
 ## **8. Limitations**
 
 1. **Capacity Constraints**: 
-   - Maximum capacity (in bits) = (image_height // 8) * (image_width // 8) * redundancy
-   - Reduced by overhead from:
-     - Reed-Solomon error correction (configurable, default 20 bytes)
-     - Sync marker (8 bits)
-     - Length information (4 bytes + RS encoding)
+   - Maximum capacity per block = number of coefficient positions (default 4 positions per 8x8 block)
+   - Total blocks = (image_height // 8) * (image_width // 8)
+   - Effective capacity is reduced by:
+     - Reed-Solomon encoding overhead (configurable via rs_error_correction, default 20 bytes)
+     - Two-part encoding scheme:
+       - Length information (4 bytes + RS encoding)
+       - Sync marker (8 bytes) + actual message + RS encoding
 
 2. **Visual Artifacts**: 
    - Sign-based changes are controlled by embedding_strength parameter (default 3.0)
