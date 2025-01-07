@@ -1,17 +1,18 @@
 # SimpleSteganoDCT
 
-A Python implementation of sign-based DCT steganography with Reed-Solomon error correction for embedding and extracting text in PNG images.
+A robust steganographic system for embedding and extracting text in images using Quantization Index Modulation (QIM) in the DCT domain. This implementation is specifically designed to survive JPEG compression by aligning the embedding process with standard JPEG quantization matrices.
 
 ---
 
 ## Features
 
-- **Text embedding** in PNG images using DCT coefficients.
-- **Sign-based steganography** in mid-frequency DCT coefficients.
-- **Reed-Solomon error correction** for robust message recovery.
-- **Sync marker validation** for reliable extraction.
-- **Quality metrics calculation**: PSNR and SSIM.
-- **Command-line interface** for easy usage.
+- Text embedding in images using DCT coefficients.
+- QIM-based embedding in mid-frequency DCT coefficients
+- JPEG compression resistance (optimized for ~70% quality)
+- Reed-Solomon error correction for improved reliability
+- Synchronization markers for accurate message recovery
+- Quality metrics calculation (PSNR, SSIM)
+- Configurable parameters via JSON configuration file
 
 ---
 
@@ -24,10 +25,15 @@ A Python implementation of sign-based DCT steganography with Reed-Solomon error 
   - scikit-image
   - reedsolo
 
-Install dependencies using:
+## Installation
 
 ```bash
-pip install opencv-python numpy scikit-image reedsolo
+# Clone the repository
+git clone https://github.com/idrassi/SimpleSteganoDCT
+cd SimpleSteganoDCT
+
+# Install required dependencies
+pip install numpy opencv-python scikit-image reedsolo
 ```
 
 ---
@@ -35,11 +41,13 @@ pip install opencv-python numpy scikit-image reedsolo
 ## Usage
 
 ### Embedding Text
+
 ```bash
 python simplestegano.py embed input_image.jpg output_stego.png --text "Your secret message"
 ```
 
 ### Extracting Text
+
 ```bash
 python simplestegano.py extract stego_image.png
 ```
@@ -54,9 +62,10 @@ Configure the system via `config.json`:
 {
     "block_size": 8,
     "sync_marker": "10101010",
-    "embedding_strength": 3.0,
     "redundancy": 4,
-    "rs_error_correction": 20
+    "rs_error_correction": 20,
+    "coeff_positions": [[2,2], [2,3], [3,2], [3,3]],
+    "alpha": 1.5
 }
 ```
 
@@ -66,27 +75,51 @@ Configure the system via `config.json`:
 - **embedding_strength**: Coefficient modification strength.
 - **redundancy**: Number of coefficients used per block.
 - **rs_error_correction**: Reed-Solomon error correction strength.
+- **coeff_positions**: DCT coefficient positions for embedding
+- **alpha**: QIM scale factor for embedding strength
 
 ---
 
 ## How It Works
 
 ### Preprocessing
-- Converts image to YCrCb color space and works with the Y-channel.
+- Converts input image to YCrCb color space
+- Uses luminance (Y) channel for embedding
+- Divides image into 8x8 pixel blocks for DCT transformation
+- Aligns embedding with JPEG quantization matrix (optimized for 70% quality)
 
 ### Embedding
-1. Applies DCT to 8x8 blocks.
-2. Embeds message bits in mid-frequency coefficients using a sign-based approach.
-3. Uses Reed-Solomon coding for error correction.
-4. Includes length information and sync marker.
+1. Message Preparation:
+   - Adds synchronization marker to the message
+   - Applies Reed-Solomon error correction encoding
+   - Creates two-part payload: length information and encoded message
+
+2. DCT Domain Processing:
+   - Transforms each 8x8 block to DCT domain
+   - Uses Quantization Index Modulation (QIM) in mid-frequency coefficients
+   - Embeds message bits by modifying coefficient quantization indices
+   - Applies inverse DCT to return to spatial domain
+
+3. Quality Preservation:
+   - Maintains image quality through careful coefficient selection
+   - Automatically calculates and reports PSNR and SSIM metrics
+   - Saves output in lossless PNG format
 
 ### Extraction
-1. Extracts encoded length information.
-2. Recovers message using Reed-Solomon decoding.
-3. Validates sync marker.
-4. Returns the original message.
+1. Message Recovery:
+   - Extracts length information from initial blocks
+   - Uses length to determine message boundary
+   - Processes DCT coefficients to recover embedded bits
 
----
+2. Error Correction:
+   - Applies Reed-Solomon decoding to correct potential errors
+   - Validates synchronization marker
+   - Recovers original message from corrected data
+
+3. Verification:
+   - Checks message integrity through sync marker
+   - Handles potential extraction errors gracefully
+   - Returns decoded message in original format
 
 ## Quality Assessment
 
@@ -96,10 +129,9 @@ The system provides **PSNR** (Peak Signal-to-Noise Ratio) and **SSIM** (Structur
 
 ## Limitations
 
-- Only supports **PNG** output format.
-- Message length is limited by image size.
-- Works best with natural images.
-- Requires sufficient image quality for reliable extraction.
+- Output images must be in PNG format to prevent compression losses
+- Maximum message length depends on input image dimensions
+- Optimized for JPEG compression around 70% quality
 
 ---
 
@@ -144,7 +176,7 @@ If you use this code in your research, please cite:
 ```bibtex
 @software{SimpleSteganoDCT,
   author = {Idrassi, Mounir},
-  title = {SimpleSteganoDCT: Sign-based DCT steganography with Reed-Solomon error correction},
+  title = {SimpleSteganoDCT: QIM-based DCT steganography with Reed-Solomon error correction},
   year = {2025},
   url = {https://github.com/idrassi/SimpleSteganoDCT}
 }

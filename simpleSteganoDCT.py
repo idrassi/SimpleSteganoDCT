@@ -1,13 +1,30 @@
 """
 SimpleSteganoDCT
-Sign-based DCT steganography with Reed–Solomon error correction
-This script provides a straightforward CLI for embedding and extracting text
-in PNG images using mid-frequency DCT coefficients in the luminance channel.
-It also calculates basic quality metrics (PSNR, SSIM) to assess the impact
-on the image.
+QIM-based DCT steganography with JPEG compression resistance and Reed-Solomon error correction
+
+This script provides a robust steganographic system for embedding and extracting text
+in images using Quantization Index Modulation (QIM) in the DCT domain. The implementation
+is specifically designed to survive JPEG compression by aligning the embedding process
+with standard JPEG quantization matrices.
+
+Key features:
+- QIM-based embedding in mid-frequency DCT coefficients
+- JPEG compression resistance (optimized for ~70% quality)
+- Reed-Solomon error correction for improved reliability
+- Synchronization markers for accurate message recovery
+- Quality metrics calculation (PSNR, SSIM)
+
+The system uses the luminance channel for embedding and implements a two-step payload
+structure with length encoding and error correction to ensure reliable message recovery
+even after compression.
+
+Usage:
+  embed:   python simpleSteganoDCT.py embed input_image output_png_image --text "message"
+  extract: python simpleSteganoDCT.py extract input_image
+
 Author: Mounir IDRASSI <mounir@idrix.fr>
 License: Apache License 2.0
-Date: 2025-01-04
+Date: 2025-01-07
 """
 
 import json
@@ -18,6 +35,30 @@ from skimage.metrics import structural_similarity as ssim
 from reedsolo import RSCodec
 import argparse
 import os
+
+#############################################
+#  JPEG Luminance Quantization for Q=50
+#############################################
+LUMINANCE_QUANT_MATRIX_50 = np.array([
+    [16, 11, 10, 16, 24,  40,  51,  61],
+    [12, 12, 14, 19, 26,  58,  60,  55],
+    [14, 13, 16, 24, 40,  57,  69,  56],
+    [14, 17, 22, 29, 51,  87,  80,  62],
+    [18, 22, 37, 56, 68, 109, 103,  77],
+    [24, 35, 55, 64, 81, 104, 113,  92],
+    [49, 64, 78, 87, 103, 121, 120, 101],
+    [72, 92, 95, 98, 112, 100, 103,  99]
+], dtype=np.float32)
+
+#############################################
+#  Scale factor for Q=70
+#  Formula for Q >= 50 is scale = (200 - 2*Q) / 100
+#  For Q=70, scale = (200 - 140) / 100 = 0.6
+#############################################
+SCALE_Q70 = 0.6
+
+# Create a Q=70 matrix by scaling the Q=50 matrix
+LUMINANCE_QUANT_MATRIX_70 = np.floor(LUMINANCE_QUANT_MATRIX_50 * SCALE_Q70 + 0.5).astype(np.float32)
 
 class SimpleStegano:
     def __init__(self, config_path="config.json"):
@@ -32,20 +73,31 @@ class SimpleStegano:
             self.config = {
                 "block_size": 8,
                 "sync_marker": "10101010",
-                "embedding_strength": 3.0,  # Alpha value for sign-based embedding
                 "redundancy": 4,  # Number of coefficients per block for embedding
-                "rs_error_correction": 20
+                "rs_error_correction": 20,
+                "coeff_positions": [[2,2], [2,3], [3,2], [3,3]],
+                "alpha": 1.5
             }
 
         self.block_size = self.config.get("block_size", 8)
         self.sync_marker = self.config.get("sync_marker", "10101010")
-        self.embedding_strength = self.config.get("embedding_strength", 3.0)
         self.redundancy = self.config.get("redundancy", 4)
         self.rs_error_correction = self.config.get("rs_error_correction", 30)
         self.rs_codec = RSCodec(self.rs_error_correction)
 
-        # Define coefficient positions for embedding (mid-frequency coefficients)
-        self.coeff_positions = [(2,2), (2,3), (3,2), (3,3)][:self.redundancy]        
+        # Define default coefficient positions for embedding (mid-frequency coefficients)
+        default_positions = [(2,2), (2,3), (3,2), (3,3)]
+        positions_data = self.config.get("coeff_positions", default_positions)
+        try:
+            # Convert list of lists to list of tuples if needed since json doesn't support tuples
+            positions = [tuple(pos) if isinstance(pos, list) else pos 
+                        for pos in positions_data]
+            self.coeff_positions = positions[:self.redundancy]
+        except (TypeError, ValueError):
+            self.coeff_positions = default_positions[:self.redundancy]
+
+        # QIM scale factor alpha. Increase if you want even stronger embedding
+        self.alpha = self.config.get("alpha", 1.5)
 
     # a method that returns the length of rs_codec encoding of 4 bytes
     def get_rs_encoded_length(self):
@@ -67,25 +119,36 @@ class SimpleStegano:
 
     def _embed_bit_in_coefficient(self, dct_block, position, bit):
         """
-        Embed a single bit using sign-based approach.
+        Embed a single bit in dct_block at position using QIM with respect
+        to the JPEG luminance quantization matrix scaled for ~70% quality.
         """
         i, j = position
         c = dct_block[i, j]
 
-        if bit == 1:
-            # Force a positive sign
-            if c <= 0:
-                dct_block[i, j] = abs(c) + self.embedding_strength
-        else:
-            # Force a negative sign
-            if c >= 0:
-                dct_block[i, j] = -abs(c) - self.embedding_strength
+        # Get the quant step from the scaled matrix
+        qstep_base = LUMINANCE_QUANT_MATRIX_70[i, j]
+        qstep = self.alpha * qstep_base  # scale up for more robust embedding
 
+        # Compute integer index
+        k = int(round(c / qstep))
+
+        # Force parity of k to match the bit
+        # If bit == 1 -> k is odd, else even
+        if bit == 1:
+            if (k % 2) == 0:
+                k += 1
+        else:
+            if (k % 2) == 1:
+                k += 1
+
+        # Reconstruct the modified coefficient
+        c_prime = k * qstep
+        dct_block[i, j] = c_prime
         return dct_block
 
     def _embed_in_dct(self, y_channel, message):
         """
-        Embed the entire message in the DCT coefficients using sign-based embedding.
+        Embed the entire message in the DCT coefficients using QIM-based embedding.
         message should be a bytes-like object.
         """
         try:
@@ -122,15 +185,20 @@ class SimpleStegano:
 
     def _extract_bit_from_coefficient(self, dct_block, position):
         """
-        Extract a single bit using sign-based approach.
+        Extract a single bit using QIM-based approach (checking parity of quantized index).
         """
         i, j = position
         c = dct_block[i, j]
-        return 1 if c > 0 else 0
+
+        qstep_base = LUMINANCE_QUANT_MATRIX_70[i, j]
+        qstep = self.alpha * qstep_base
+
+        k = int(round(c / qstep))
+        return 1 if (k % 2) == 1 else 0
 
     def _extract_from_dct(self, y_channel, total_bits):
         """
-        Extract total_bits bits from the DCT coefficients using sign-based extraction.
+        Extract total_bits bits from the DCT coefficients using QIM-based extraction.
         """
         try:
             height, width = y_channel.shape
@@ -217,9 +285,9 @@ class SimpleStegano:
          - Then extract the next (that length) bytes (encoded1) -> decode using RS -> yields original message string.
          - Validate sync marker.
         """
-        self._validate_png_format(stego_image_path)
+
         try:
-            # We know encoded2 is encoding of 4 bytes so we use get_rs_encoded_length 
+            # We know encoded2 is encoding of 4 bytes, so we use get_rs_encoded_length 
             # to get the length in bytes. Multiply by 8 to get the length in bits.
             encoded2_size_in_bits = self.get_rs_encoded_length() * 8
 
@@ -264,9 +332,10 @@ class SimpleStegano:
         except Exception as e:
             raise RuntimeError(f"Text extraction failed: {e}")
 
+
 if __name__ == "__main__":
     # Set up argument parser
-    parser = argparse.ArgumentParser(description='Simple steganography for text embedding and extraction')
+    parser = argparse.ArgumentParser(description='QIM-based steganography for text embedding and extraction')
     subparsers = parser.add_subparsers(dest='mode', help='Operating mode')
 
     # Embed mode parser
@@ -278,7 +347,7 @@ if __name__ == "__main__":
 
     # Extract mode parser
     extract_parser = subparsers.add_parser('extract', help='Extract text from image')
-    extract_parser.add_argument('input_png_image', help='Path to PNG image containing hidden text')
+    extract_parser.add_argument('input_image', help='Path to image containing hidden text')
 
     args = parser.parse_args()
 
@@ -315,17 +384,13 @@ if __name__ == "__main__":
             print(f"Verification - Extracted message: {message}")
 
         elif args.mode == 'extract':
-            # Validate input is PNG
-            if not args.input_png_image.lower().endswith('.png'):
-                raise ValueError("Input file must be a PNG image")
 
             # Validate input image exists and can be opened
-            if not os.path.exists(args.input_png_image):
-                raise ValueError(f"Input PNG image not found: {args.input_png_image}")
+            if not os.path.exists(args.input_image):
+                raise ValueError(f"Input PNG image not found: {args.input_image}")
 
-            message = steg.extract_text_steganography(args.input_png_image)
+            message = steg.extract_text_steganography(args.input_image)
             print(f"Extracted message: {message}")
 
     except Exception as e:
         print(f"Error: {e}")
-
