@@ -31,7 +31,7 @@ This document provides an in-depth technical overview of the **SimpleSteganoDCT*
 
 ## **1. Introduction**
 
-Steganography is the practice of hiding data in a seemingly innocuous medium. With the rise of digital communication, image steganography remains one of the most popular forms of covert data exchange. The **SimpleSteganoDCT** Python program implements a **sign-based** approach for embedding secret messages into the mid-frequency components of the Discrete Cosine Transform (DCT) of an image, enhanced by **Reed-Solomon error correction** to improve robustness and reliability.
+Steganography is the practice of hiding data in a seemingly innocuous medium. With the rise of digital communication, image steganography remains one of the most popular forms of covert data exchange. The **SimpleSteganoDCT** Python program implements a **Quantization Index Modulation (QIM)** approach for embedding secret messages into the mid-frequency components of the Discrete Cosine Transform (DCT) of an image. The code is optimized to be more resilient to JPEG compression (at around 70% quality). It also includes **Reed-Solomon error correction** to improve robustness and reliability.
 
 This document details every aspect of the system, including mathematical underpinnings, algorithmic steps, and potential limitations. It aims to be useful to researchers, security practitioners, and enthusiasts who want to explore or extend DCT-based steganography techniques.
 
@@ -57,12 +57,19 @@ Frequency components in a typical 8x8 DCT block are categorized as:
 
 By embedding in the **mid-frequency** region, we aim to maintain a good balance between **imperceptibility** and **robustness**.
 
-### **Sign-Based Embedding Rationale**
+### **QIM-Based Embedding Rationale**
 
-Instead of modifying the magnitude of DCT coefficients, a **sign-based** approach flips the sign of certain coefficients to store bits. This has two advantages:
+Instead of modifying the magnitude or flipping the sign of DCT coefficients, SimpleSteganoDCT approach uses **Quantization Index Modulation (QIM)**. In this method:
 
-1. **Minimal Impact on Magnitude**: Slight sign changes often produce fewer perceptible artifacts compared to large magnitude changes.
-2. **Resistance to Minor Distortions**: Minor rounding errors or slight noise typically do not affect the sign as drastically as they might affect exact magnitudes.
+1. **Quantization Steps**: Each DCT coefficient is divided by a quantization step, yielding an integer index \(k\).  
+2. **Bit Encoding via Parity**: If the bit to embed is '1', the integer index is forced to be odd; if the bit is '0', the index is forced to be even.  
+3. **Reconstruction**: The modified coefficient is recalculated by multiplying the new integer index by the quantization step, thereby embedding the bit.
+
+This QIM approach provides the following advantages:
+
+1. **JPEG Robustness**: By aligning with the JPEG luminance quantization matrix, the embedding process can better survive subsequent JPEG compression.  
+2. **Low Visual Impact**: Small, quantized coefficient changes can be less visually noticeable than repeated sign flips or large magnitude changes.  
+3. **Efficient Bit Embedding**: Parity-based embedding avoids drastic coefficient modifications while ensuring each bit is consistently recoverable under mild compression or rounding.
 
 ---
 
@@ -86,7 +93,7 @@ Instead of modifying the magnitude of DCT coefficients, a **sign-based** approac
            ▼                                  ▼
     (4) Embed Bits                   ────────────────────
      in Mid-Freq                        Combine Encoded 
-  Coefficients via Sign              ────────────────────
+  Coefficients via QIM               ────────────────────
            │                                  │
            ▼                                  │
        (5) iDCT                               │
@@ -98,7 +105,7 @@ Instead of modifying the magnitude of DCT coefficients, a **sign-based** approac
 1. **Preprocessing**: Converts the input image from RGB to YCrCb color space to operate on the luminance (Y) channel.
 2. **Block-Wise DCT**: Splits the Y channel into 8x8 blocks and calculates the DCT of each block.
 3. **Message Encoding**: Encodes the secret text using Reed-Solomon and attaches a sync marker and length information.
-4. **Sign-Based Embedding**: Alters the sign of selected mid-frequency DCT coefficients according to the encoded bits.
+4. **QIM-Based Embedding**: Alters the selected mid-frequency DCT coefficients according to the encoded bits.
 5. **Reconstruction**: Performs the inverse DCT (iDCT) and merges the Y channel back with the CrCb channels to produce the final stego image.
 
 ---
@@ -153,18 +160,24 @@ H:  High frequency
     - The final payload is the concatenation: encoded2 + encoded1.
     - This payload is ready for embedding into the DCT coefficients.
 
-### **Sign Modification in Mid-Frequency Coefficients**
+### **QIM-Based Coefficient Modification**
 
-1. **Coefficient Selection**:
-    - Fixed mid-frequency positions are used: [(2,2), (2,3), (3,2), (3,3)].
-    - The number of positions used is controlled by the redundancy parameter.
-2. **Sign Modification**:
-    - For bit '1': If coefficient is non-positive, make it positive by taking absolute value and adding embedding strength.
-    - For bit '0': If coefficient is non-negative, make it negative by taking negative absolute value and subtracting embedding strength.
-    - Only modify the coefficient if its current sign doesn't match the desired bit.
-3. **Embedding Strength**:
-    - A fixed value (default 3.0) is added/subtracted when modifying coefficients.
-    - This creates a minimum magnitude difference between positive and negative coefficients to improve robustness.
+1. **Coefficient Selection**:  
+   - Fixed mid-frequency positions are used: \((2,2)\), \((2,3)\), \((3,2)\), \((3,3)\).  
+   - The redundancy parameter controls how many of these positions are used.
+
+2. **Quantization Step**:  
+   - A baseline quantization matrix, derived from the standard **JPEG Q=50** matrix, is scaled by a factor (\(0.6\) for Q=70).  
+   - An additional **\(\alpha\)** parameter scales these steps further (e.g., \(\alpha = 1.5\)) to control the embedding strength.
+
+3. **Embedding Each Bit**:  
+   - For each bit b ∈ {0,1}:  
+     1. Compute k = round(c / (α × q_base)), where c is the current DCT coefficient and q_base is the base quantization value for that coefficient's position.  
+     2. Enforce parity: if b=1, make k odd; if b=0, make k even.  
+     3. Reconstruct the coefficient as c' = k × (α × q_base).
+
+4. **Inverse DCT**:  
+   - The modified blocks are subjected to iDCT, and the resulting Y-channel is reassembled to form the stego image.
 
 ---
 
@@ -182,7 +195,7 @@ H:  High frequency
 
 3. **Message Extraction**
    - Continues processing DCT blocks
-   - Extracts bits based on coefficient signs at positions [(2,2), (2,3), (3,2), (3,3)]
+   - Extracts bits based on coefficient parity at positions [(2,2), (2,3), (3,2), (3,3)]
    - Collects exactly the number of bits indicated by length information
 
 4. **Message Reconstruction**
@@ -255,6 +268,10 @@ SSIM(x,y) = (2μxμy + c1)(2σxy + c2) / ((μx² + μy² + c1)(σx² + σy² + c
 
 The metrics are calculated and printed after embedding. They provide a quantitative estimate of how embedding affects image quality. Higher PSNR and SSIM values indicate better steganographic quality with less noticeable artifacts.
 
+With QIM-based embedding:
+- **Distortions** are often controlled by \(\alpha\).  
+- **Robustness** can be improved by increasing \(\alpha\) but at the cost of lower PSNR and SSIM.
+
 ---
 
 ## **8. Limitations**
@@ -269,29 +286,18 @@ The metrics are calculated and printed after embedding. They provide a quantitat
        - Sync marker (8 bytes) + actual message + RS encoding
 
 2. **Visual Artifacts**: 
-   - Sign-based changes are controlled by embedding_strength parameter (default 3.0)
-   - Higher values increase robustness but may cause visible distortions
-   - Quality impact is measured using PSNR and SSIM metrics
+   - Primarily controlled by **\(\alpha\)** (embedding strength factor).  
+   - Larger \(\alpha\) ensures stronger QIM embedding but can cause more artifacts.
 
 3. **Format Restrictions**: 
-   - Strictly requires PNG format for both:
-     - Output of embedding process
-     - Input for extraction process
-   - Other formats are rejected with validation errors
-   - Any format conversion will likely destroy the hidden data
+   - Strictly requires PNG format output of embedding process
 
-4. **PNG Validation**: 
-   - Enforces strict PNG format through:
-     - File extension verification
-     - PNG signature validation
-   - No support for other lossless formats (e.g., BMP, TIFF)
-
-5. **Image Requirements**: 
+4. **Image Requirements**: 
    - Image dimensions must accommodate 8x8 DCT blocks
    - Sufficient quality needed for reliable DCT coefficient manipulation
    - No built-in validation for image quality or noise levels
 
-6. **Security Considerations**: 
+5. **Security Considerations**: 
    - No cryptographic protection of hidden content
    - Fixed embedding positions in DCT blocks
    - Known sync marker and encoding scheme
@@ -316,9 +322,7 @@ In the future, improvements could include:
    - Add error recovery mechanisms for partially corrupted images
 
 3. **Format Support**: 
-   - Add support for other lossless formats beyond PNG
-   - Implement JPEG-aware embedding that survives compression
-   - Add format conversion handling
+   - Add support for other lossless formats for output beyond PNG
 
 4. **Security Enhancements**:
    - Add encryption layer for message content
